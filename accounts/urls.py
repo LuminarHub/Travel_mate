@@ -1,5 +1,12 @@
-from django.urls import path
+from django.urls import path,include
 from .views import *
+from rest_framework.routers import DefaultRouter
+
+
+router = DefaultRouter()
+router.register(r'users',UserViewSet)
+router.register(r'rooms', ChatRoomViewSet, basename='room')
+router.register(r'messages', MessageViewSet, basename='message')
 
 urlpatterns = [
     path('login/',LoginView.as_view()),
@@ -11,4 +18,6 @@ urlpatterns = [
     path('trip-delete/<int:pk>/',TripDeleteView.as_view()),
     path('my-trips/',TripGetView.as_view()),
     path('trip-all/',AllTripsView.as_view()),
+    
+     path('api/', include(router.urls)),
 ]

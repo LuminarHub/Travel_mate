@@ -21,9 +21,8 @@ class UserTokenObtainPairSerializer(TokenObtainPairSerializer):
         token['budget'] = user.budget if user.budget else None
         token['from_date'] = user.from_date if user.from_date else None
         token['to_date'] = user.to_date if user.to_date else None
-
         return token
-
+    
     def validate(self, attrs):
         data = super().validate(attrs)
         user = self.user
@@ -87,4 +86,41 @@ class TripSerializer(serializers.ModelSerializer):
         fields=['id','name','description','price','stock','category','image_url','user']
         
       
- 
+class UserSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CustomUser
+        fields = ['id', 'name', 'email', 'phone', 'image']
+
+class MessageSerializer(serializers.ModelSerializer):
+    sender = UserSerializer(read_only=True)
+    
+    class Meta:
+        model = Message
+        fields = ['id', 'sender', 'content', 'timestamp', 'is_read']
+
+class RoomMemberSerializer(serializers.ModelSerializer):
+    user = UserSerializer(read_only=True)
+    
+    class Meta:
+        model = RoomMember
+        fields = ['id', 'user', 'joined_at', 'is_admin']
+
+class ChatRoomSerializer(serializers.ModelSerializer):
+    members = RoomMemberSerializer(many=True, read_only=True)
+    last_message = serializers.SerializerMethodField()
+    unread_count = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = ChatRoom
+        fields = ['id', 'name', 'room_type', 'description', 'created_at', 
+                 'members', 'last_message', 'unread_count']
+    
+    def get_last_message(self, obj):
+        last_message = obj.messages.order_by('-timestamp').first()
+        if last_message:
+            return MessageSerializer(last_message).data
+        return None
+    
+    def get_unread_count(self, obj):
+        user = self.context.get('request').user
+        return obj.messages.exclude(sender__id=user.id).filter(is_read=False).count()

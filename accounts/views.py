@@ -173,3 +173,116 @@ class AllTripsView(APIView):
             return Response(data={"Msg": "All Trips","data":pro.data}, status=status.HTTP_200_OK)
         except Exception as e:
             return Response(data={"Msg": str(e)}, status=status.HTTP_404_NOT_FOUND)
+        
+        
+from rest_framework import viewsets
+from .utils import get_or_create_personal_chat
+from rest_framework.decorators import action
+
+class UserViewSet(viewsets.ReadOnlyModelViewSet):
+    queryset = CustomUser.objects.all()
+    serializer_class = UserSerializer
+    permission_classes = [IsAuthenticated]
+
+class ChatRoomViewSet(viewsets.ModelViewSet):
+    queryset = ChatRoom.objects.all() 
+    serializer_class = ChatRoomSerializer
+    permission_classes = [IsAuthenticated]
+    
+    def get_queryset(self):
+        user = self.request.user
+        return ChatRoom.objects.filter(members__user=user)
+    
+    def perform_create(self, serializer):
+        room = serializer.save()
+        RoomMember.objects.create(room=room, user=self.request.user, is_admin=True)
+    
+    @action(detail=False, methods=['get'])
+    def my_chats(self, request):
+        """Get all chats (both personal and group) for the current user"""
+        user = request.user
+        rooms = ChatRoom.objects.filter(members__user=user)
+        serializer = self.get_serializer(rooms, many=True)
+        return Response(serializer.data)
+    
+    @action(detail=False, methods=['post'])
+    def start_personal_chat(self, request):
+        """Start or get a personal chat with another user"""
+        user_id = request.data.get('user_id')
+        if not user_id:
+            return Response({"error": "user_id is required"}, status=status.HTTP_400_BAD_REQUEST)
+        
+        try:
+            other_user = CustomUser.objects.get(id=user_id)
+            room = get_or_create_personal_chat(request.user, other_user)
+            serializer = self.get_serializer(room)
+            return Response(serializer.data)
+        except CustomUser.DoesNotExist:
+            return Response({"error": "User not found"}, status=status.HTTP_404_NOT_FOUND)
+    
+    @action(detail=True, methods=['post'])
+    def add_member(self, request, pk=None):
+        """Add a user to a group chat"""
+        room = self.get_object()
+        if room.room_type != 'group':
+            return Response({"error": "Can only add members to group chats"}, 
+                            status=status.HTTP_400_BAD_REQUEST)
+        
+        try:
+            member = RoomMember.objects.get(room=room, user=request.user)
+            if not member.is_admin:
+                return Response({"error": "Only admins can add members"}, 
+                                status=status.HTTP_403_FORBIDDEN)
+        except RoomMember.DoesNotExist:
+            return Response({"error": "You are not a member of this group"}, 
+                            status=status.HTTP_403_FORBIDDEN)
+        user_id = request.data.get('user_id')
+        try:
+            user = CustomUser.objects.get(id=user_id)
+            RoomMember.objects.create(room=room, user=user)
+            return Response({"status": "User added successfully"})
+        except CustomUser.DoesNotExist:
+            return Response({"error": "User not found"}, status=status.HTTP_404_NOT_FOUND)
+    
+class MessageViewSet(viewsets.ReadOnlyModelViewSet):
+    queryset = Message.objects.all() 
+    serializer_class = MessageSerializer
+    permission_classes = [IsAuthenticated]
+    
+    def get_queryset(self):
+        room_id = self.request.query_params.get('room_id')
+        if not room_id:
+            return Message.objects.none()
+        
+        user = self.request.user
+        # Check if the user is a member of this room
+        is_member = RoomMember.objects.filter(room_id=room_id, user=user).exists()
+        if not is_member:
+            return Message.objects.none()
+        
+        # Return messages for this room
+        return Message.objects.filter(room_id=room_id).order_by('timestamp')
+    
+    @action(detail=False, methods=['get'])
+    def unread(self, request):
+        """Get count of unread messages grouped by room"""
+        user = request.user
+        # Get rooms where user is a member
+        rooms = ChatRoom.objects.filter(members__user=user)
+        result = []
+        
+        for room in rooms:
+            unread_count = Message.objects.filter(
+                room=room, 
+                sender__id__ne=user.id, 
+                is_read=False
+            ).count()
+            
+            if unread_count > 0:
+                result.append({
+                    'room_id': room.id,
+                    'room_name': room.name,
+                    'unread_count': unread_count
+                })
+                
+        return Response(result)
