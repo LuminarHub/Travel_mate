@@ -83,7 +83,7 @@ class ProfileSer(serializers.ModelSerializer):
 class TripSerializer(serializers.ModelSerializer):
     class Meta:
         model=Trip
-        fields=['id','name','description','price','stock','category','image_url','user']
+        fields=['id','trip_name','location','description','travel_type','group_size','budget','from_date','to_date','image']
         
       
 class UserSerializer(serializers.ModelSerializer):
