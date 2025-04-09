@@ -220,14 +220,12 @@ class ChatRoomViewSet(viewsets.ModelViewSet):
         except CustomUser.DoesNotExist:
             return Response({"error": "User not found"}, status=status.HTTP_404_NOT_FOUND)
     
-    @action(detail=True, methods=['post'])
+    @action(detail=True, methods=['post'], url_path='members/add')
     def add_member(self, request, pk=None):
         """Add a user to a group chat"""
         room = self.get_object()
         if room.room_type != 'group':
-            return Response({"error": "Can only add members to group chats"}, 
-                            status=status.HTTP_400_BAD_REQUEST)
-        
+            return Response({"error": "Can only add members to group chats"},status=status.HTTP_400_BAD_REQUEST)
         try:
             member = RoomMember.objects.get(room=room, user=request.user)
             if not member.is_admin:
@@ -244,45 +242,239 @@ class ChatRoomViewSet(viewsets.ModelViewSet):
         except CustomUser.DoesNotExist:
             return Response({"error": "User not found"}, status=status.HTTP_404_NOT_FOUND)
     
+    
+from rest_framework.response import Response
+
 class MessageViewSet(viewsets.ReadOnlyModelViewSet):
-    queryset = Message.objects.all() 
+    queryset = Message.objects.all()
     serializer_class = MessageSerializer
     permission_classes = [IsAuthenticated]
-    
+
     def get_queryset(self):
         room_id = self.request.query_params.get('room_id')
         if not room_id:
             return Message.objects.none()
-        
         user = self.request.user
-        # Check if the user is a member of this room
         is_member = RoomMember.objects.filter(room_id=room_id, user=user).exists()
         if not is_member:
             return Message.objects.none()
-        
-        # Return messages for this room
         return Message.objects.filter(room_id=room_id).order_by('timestamp')
-    
+
+    @action(detail=False, methods=['post'])
+    def send_message(self, request):
+        """Handle sending a message"""
+        room_id = self.request.query_params.get('room_id')
+        content = request.data.get('content')
+
+        if not room_id or not content:
+            return Response({"error": "Room ID and message content are required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        user = request.user
+        is_member = RoomMember.objects.filter(room_id=room_id, user=user).exists()
+        if not is_member:
+            return Response({"error": "User is not a member of this room."}, status=status.HTTP_403_FORBIDDEN)
+
+        message = Message.objects.create(
+            room_id=room_id,
+            sender=user,
+            content=content,
+        )
+
+        return Response(MessageSerializer(message).data, status=status.HTTP_201_CREATED)
+
     @action(detail=False, methods=['get'])
     def unread(self, request):
-        """Get count of unread messages grouped by room"""
+        """Get count of unread messages grouped by room and sent messages"""
         user = request.user
-        # Get rooms where user is a member
         rooms = ChatRoom.objects.filter(members__user=user)
         result = []
-        
+
         for room in rooms:
             unread_count = Message.objects.filter(
-                room=room, 
-                sender__id__ne=user.id, 
+                room=room,
+                sender__id=user.id,
                 is_read=False
             ).count()
-            
-            if unread_count > 0:
+
+            sent_messages = Message.objects.filter(
+                room=room,
+                sender=user
+            ).values('id', 'content', 'timestamp')  
+
+            if unread_count > 0 or sent_messages.exists():
                 result.append({
                     'room_id': room.id,
                     'room_name': room.name,
-                    'unread_count': unread_count
+                    'unread_count': unread_count,
+                    'sent_messages': list(sent_messages)  
                 })
-                
         return Response(result)
+
+    @action(detail=True, methods=['post'])
+    def mark_as_read(self, request, pk=None):
+        """Mark a message as read"""
+        try:
+            message = Message.objects.get(pk=pk)
+        except Message.DoesNotExist:
+            return Response({"error": "Message not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        if message.is_read:
+            return Response({"message": "Message is already marked as read."}, status=status.HTTP_400_BAD_REQUEST)
+        message.is_read = True
+        message.save()
+
+        return Response(MessageSerializer(message).data, status=status.HTTP_200_OK)
+    
+class MemberViewSet(viewsets.ModelViewSet):
+    queryset = RoomMember.objects.all()
+    serializer_class = RoomMemberSerializer
+    permission_classes = [IsAuthenticated]
+    
+    def get_queryset(self):
+        room_id = self.request.query_params.get('room_id')
+        if room_id:
+            return RoomMember.objects.filter(room_id=room_id)
+        return RoomMember.objects.filter(user=self.request.user)
+    
+    def perform_create(self, serializer):
+        room_id = self.request.data.get('room_id')
+        user_id = self.request.data.get('user_id')
+        
+        try:
+            room = ChatRoom.objects.get(id=room_id)
+        except ChatRoom.DoesNotExist:
+            raise ValidationError({"error": "Room not found"})
+        
+        if room.room_type != 'group':
+            raise ValidationError({"error": "Can only add members to group chats"})
+        
+        try:
+            current_user_member = RoomMember.objects.get(room=room, user=self.request.user)
+            if not current_user_member.is_admin:
+                raise ValidationError({"error": "Only admins can add members"})
+        except RoomMember.DoesNotExist:
+            raise ValidationError({"error": "You are not a member of this group"})
+        
+        try:
+            user = CustomUser.objects.get(id=user_id)
+        except CustomUser.DoesNotExist:
+            raise ValidationError({"error": "User not found"})
+        
+        if RoomMember.objects.filter(room=room, user=user).exists():
+            raise ValidationError({"error": "User is already a member of this group"})
+        serializer.save(room=room, user=user)
+    
+    @action(detail=False, methods=['delete'])
+    def remove_member(self, request):
+        """Remove a user from a group chat"""
+        room_id = request.data.get('room_id')
+        user_id = request.data.get('user_id')
+        
+        if not room_id or not user_id:
+            return Response({"error": "room_id and user_id are required"}, 
+                           status=status.HTTP_400_BAD_REQUEST)
+        
+        try:
+            room = ChatRoom.objects.get(id=room_id)
+            
+            # Check if the room is a group chat
+            if room.room_type != 'group':
+                return Response({"error": "Can only remove members from group chats"},
+                              status=status.HTTP_400_BAD_REQUEST)
+            
+            # Check if the current user is an admin
+            try:
+                current_user_member = RoomMember.objects.get(room=room, user=request.user)
+                if not current_user_member.is_admin:
+                    return Response({"error": "Only admins can remove members"}, 
+                                  status=status.HTTP_403_FORBIDDEN)
+            except RoomMember.DoesNotExist:
+                return Response({"error": "You are not a member of this group"}, 
+                              status=status.HTTP_403_FORBIDDEN)
+            
+            # Get the member to remove
+            try:
+                member = RoomMember.objects.get(room=room, user_id=user_id)
+                # Don't allow removing the last admin
+                if member.is_admin and RoomMember.objects.filter(room=room, is_admin=True).count() <= 1:
+                    return Response({"error": "Cannot remove the last admin"}, 
+                                  status=status.HTTP_400_BAD_REQUEST)
+                member.delete()
+                return Response({"status": "Member removed successfully"})
+            except RoomMember.DoesNotExist:
+                return Response({"error": "User is not a member of this group"}, 
+                              status=status.HTTP_404_NOT_FOUND)
+        except ChatRoom.DoesNotExist:
+            return Response({"error": "Room not found"}, status=status.HTTP_404_NOT_FOUND)
+    
+    @action(detail=False, methods=['post'])
+    def make_admin(self, request):
+        """Make a user an admin of a group chat"""
+        room_id = request.data.get('room_id')
+        user_id = request.data.get('user_id')
+        
+        if not room_id or not user_id:
+            return Response({"error": "room_id and user_id are required"}, 
+                           status=status.HTTP_400_BAD_REQUEST)
+        
+        try:
+            room = ChatRoom.objects.get(id=room_id)
+            
+            # Check if the room is a group chat
+            if room.room_type != 'group':
+                return Response({"error": "Can only set admins in group chats"},
+                              status=status.HTTP_400_BAD_REQUEST)
+            
+            # Check if the current user is an admin
+            try:
+                current_user_member = RoomMember.objects.get(room=room, user=request.user)
+                if not current_user_member.is_admin:
+                    return Response({"error": "Only admins can set new admins"}, 
+                                  status=status.HTTP_403_FORBIDDEN)
+            except RoomMember.DoesNotExist:
+                return Response({"error": "You are not a member of this group"}, 
+                              status=status.HTTP_403_FORBIDDEN)
+            
+            # Get the member to promote
+            try:
+                member = RoomMember.objects.get(room=room, user_id=user_id)
+                member.is_admin = True
+                member.save()
+                return Response({"status": "User is now an admin"})
+            except RoomMember.DoesNotExist:
+                return Response({"error": "User is not a member of this group"}, 
+                              status=status.HTTP_404_NOT_FOUND)
+        except ChatRoom.DoesNotExist:
+            return Response({"error": "Room not found"}, status=status.HTTP_404_NOT_FOUND)
+    
+    @action(detail=False, methods=['get'])
+    def list_members(self, request):
+        """List all members of a room"""
+        room_id = request.query_params.get('room_id')
+        if not room_id:
+            return Response({"error": "room_id is required"}, 
+                           status=status.HTTP_400_BAD_REQUEST)
+        
+        try:
+            room = ChatRoom.objects.get(id=room_id)
+            
+            # Check if the current user is a member
+            if not RoomMember.objects.filter(room=room, user=request.user).exists():
+                return Response({"error": "You are not a member of this room"}, 
+                              status=status.HTTP_403_FORBIDDEN)
+            
+            members = RoomMember.objects.filter(room=room).select_related('user')
+            member_data = []
+            
+            for member in members:
+                member_data.append({
+                    'id': member.id,
+                    'user_id': member.user.id,
+                    'username': member.user.name,
+                    'is_admin': member.is_admin,
+                    'joined_at': member.joined_at
+                })
+            
+            return Response(member_data)
+        except ChatRoom.DoesNotExist:
+            return Response({"error": "Room not found"}, status=status.HTTP_404_NOT_FOUND)

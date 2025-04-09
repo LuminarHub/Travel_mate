@@ -57,6 +57,7 @@ class CustomUser(AbstractBaseUser, PermissionsMixin):
 
 
 class Trip(models.Model):
+    user = models.ForeignKey(CustomUser, related_name='user_trip', on_delete=models.CASCADE,null=True)
     trip_name = models.CharField(max_length=100)
     location = models.CharField(max_length=100)
     description = models.TextField()
@@ -92,13 +93,13 @@ class RoomMember(models.Model):
     room = models.ForeignKey(ChatRoom, related_name='members', on_delete=models.CASCADE)
     user = models.ForeignKey(CustomUser, related_name='chat_rooms', on_delete=models.CASCADE)
     joined_at = models.DateTimeField(auto_now_add=True)
-    is_admin = models.BooleanField(default=False)  # For group chats
+    is_admin = models.BooleanField(default=False)  
     
     class Meta:
         unique_together = ('room', 'user')
     
     def __str__(self):
-        return f"{self.user.username} in {self.room.name}"
+        return f"{self.user.name} in {self.room.name}"
 
 class Message(models.Model):
     room = models.ForeignKey(ChatRoom, related_name='messages', on_delete=models.CASCADE)
@@ -108,4 +109,4 @@ class Message(models.Model):
     is_read = models.BooleanField(default=False)
     
     def __str__(self):
-        return f"{self.sender.username}: {self.content[:20]}"
+        return f"{self.sender.name}: {self.content[:20]}"

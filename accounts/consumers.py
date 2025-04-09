@@ -3,7 +3,7 @@ import json
 from channels.generic.websocket import AsyncWebsocketConsumer
 from channels.db import database_sync_to_async
 from django.contrib.auth.models import User
-from .models import Message, ChatRoom, RoomMember
+from .models import Message, ChatRoom, RoomMember,CustomUser
 
 class ChatConsumer(AsyncWebsocketConsumer):
     async def connect(self):
@@ -41,18 +41,18 @@ class ChatConsumer(AsyncWebsocketConsumer):
     async def receive(self, text_data):
         text_data_json = json.loads(text_data)
         message_content = text_data_json['message']
-        
+
         # Get room details
         room = await self.get_room(self.room_id)
         
-        # Save message to database
+        # Save message to the database
         message = await self.save_message(self.user.id, message_content, self.room_id)
-        
-        # Send message to room group
+
+        # Send message to room group (broadcast the message to others)
         await self.channel_layer.group_send(
             self.room_group_name,
             {
-                'type': 'chat_message',
+                'type': 'chat_message',  # WebSocket event type to send
                 'message': message_content,
                 'username': self.user.username,
                 'user_id': self.user.id,
@@ -73,6 +73,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
             'timestamp': event['timestamp'],
             'room_type': event['room_type']
         }))
+
     
     @database_sync_to_async
     def is_room_member(self, user_id, room_id):
@@ -98,9 +99,22 @@ class ChatConsumer(AsyncWebsocketConsumer):
     
     @database_sync_to_async
     def mark_messages_as_read(self, user_id, room_id):
-        # Mark messages from other users as read when user joins
         Message.objects.filter(
             room_id=room_id,
             sender__id__ne=user_id,
             is_read=False
         ).update(is_read=True)
+        
+    # Receive message from WebSocket
+
+    @database_sync_to_async
+    def save_message(self, user_id, content, room_id):
+        user = CustomUser.objects.get(id=user_id)  # Use CustomUser instead of User
+        room = ChatRoom.objects.get(id=room_id)
+        
+        message = Message.objects.create(
+            sender=user,  # Ensure it's a CustomUser instance
+            content=content,
+            room=room
+        )
+        return message

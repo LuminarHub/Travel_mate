@@ -75,15 +75,16 @@ class ProfileSer(serializers.ModelSerializer):
     class Meta:
         model=CustomUser
         fields=['id','name', 'phone', 'email', 'alternative_phone','image', 'travel_type', 
-            'language', 'id_proof', 'budget','group_size', 'from_date', 'to_date']
+                    'language', 'id_proof', 'budget','group_size', 'from_date', 'to_date']
         
     def create(self,validated_data):
         return CustomUser.objects.create_user(**validated_data)
     
 class TripSerializer(serializers.ModelSerializer):
+    user = serializers.ReadOnlyField(source="user.id")
     class Meta:
         model=Trip
-        fields=['id','trip_name','location','description','travel_type','group_size','budget','from_date','to_date','image']
+        fields=['id','trip_name','location','description','travel_type','group_size','budget','from_date','to_date','image','user']
         
       
 class UserSerializer(serializers.ModelSerializer):
@@ -98,12 +99,14 @@ class MessageSerializer(serializers.ModelSerializer):
         model = Message
         fields = ['id', 'sender', 'content', 'timestamp', 'is_read']
 
+
 class RoomMemberSerializer(serializers.ModelSerializer):
-    user = UserSerializer(read_only=True)
-    
+    username = serializers.ReadOnlyField(source='user.name')    
     class Meta:
         model = RoomMember
-        fields = ['id', 'user', 'joined_at', 'is_admin']
+        fields = ['id', 'room', 'user', 'username', 'is_admin', 'joined_at']
+        read_only_fields = ['joined_at']
+        
 
 class ChatRoomSerializer(serializers.ModelSerializer):
     members = RoomMemberSerializer(many=True, read_only=True)
