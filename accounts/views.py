@@ -176,13 +176,16 @@ class AllTripsView(APIView):
         
         
 from rest_framework import viewsets
-from .utils import get_or_create_personal_chat
+from .utils  import  get_or_create_personal_chat
 from rest_framework.decorators import action
+
 
 class UserViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = CustomUser.objects.all()
     serializer_class = UserSerializer
     permission_classes = [IsAuthenticated]
+
+
 
 class ChatRoomViewSet(viewsets.ModelViewSet):
     queryset = ChatRoom.objects.all() 
@@ -191,7 +194,7 @@ class ChatRoomViewSet(viewsets.ModelViewSet):
     
     def get_queryset(self):
         user = self.request.user
-        return ChatRoom.objects.filter(members__user=user)
+        return ChatRoom.objects.filter(members__user=user).order_by('-created_at')
     
     def perform_create(self, serializer):
         room = serializer.save()
@@ -224,6 +227,7 @@ class ChatRoomViewSet(viewsets.ModelViewSet):
     def add_member(self, request, pk=None):
         """Add a user to a group chat"""
         room = self.get_object()
+        print("neww")
         if room.room_type != 'group':
             return Response({"error": "Can only add members to group chats"},status=status.HTTP_400_BAD_REQUEST)
         try:
@@ -231,6 +235,7 @@ class ChatRoomViewSet(viewsets.ModelViewSet):
             if not member.is_admin:
                 return Response({"error": "Only admins can add members"}, 
                                 status=status.HTTP_403_FORBIDDEN)
+            
         except RoomMember.DoesNotExist:
             return Response({"error": "You are not a member of this group"}, 
                             status=status.HTTP_403_FORBIDDEN)
